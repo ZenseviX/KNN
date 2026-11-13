@@ -15,8 +15,7 @@ import sys
 
 import numpy as np
 
-from KNN_advanced import KNNClassifier
-
+from knn_advanced import KNNClassifier
 PALETTE = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3", "#937860"]
 
 
