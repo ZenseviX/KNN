@@ -22,6 +22,10 @@ import numpy as np
 def pairwise_distances(A, B, metric="euclidean", p=3):
     A = np.asarray(A, dtype=float)
     B = np.asarray(B, dtype=float)
+    if A.ndim != 2 or B.ndim != 2 or A.shape[1] != B.shape[1]:
+        raise ValueError("A and B must be 2D with the same feature count")
+    if metric == "minkowski" and (not np.isfinite(p) or p < 1):
+        raise ValueError("Minkowski p must be finite and >= 1")
 
     if metric == "euclidean":
         # ใช้สูตร |a-b|^2 = |a|^2 + |b|^2 - 2a.b  (เร็วกว่าการวนลูป)
@@ -38,13 +42,13 @@ def pairwise_distances(A, B, metric="euclidean", p=3):
         Bn = np.linalg.norm(B, axis=1, keepdims=True)
         An[An == 0] = 1.0
         Bn[Bn == 0] = 1.0
-        return 1.0 - (A / An) @ (B / Bn).T
+        return np.clip(1.0 - (A / An) @ (B / Bn).T, 0.0, 2.0)
     raise ValueError(f"ไม่รู้จัก metric: {metric}")
 
 
 class KNNClassifier:
     def __init__(self, k=3, metric="euclidean", weights="uniform",
-                 standardize=False, p=3):
+                 standardize=False, p=3, batch_size=512):
         """
         k           : จำนวนเพื่อนบ้าน
         metric      : euclidean | manhattan | minkowski | chebyshev | cosine
@@ -54,6 +58,15 @@ class KNNClassifier:
         """
         if weights not in ("uniform", "distance"):
             raise ValueError("weights ต้องเป็น 'uniform' หรือ 'distance'")
+        if not isinstance(k, (int, np.integer)) or isinstance(k, (bool, np.bool_)) or k < 1:
+            raise ValueError("k must be a positive integer")
+        if metric not in ("euclidean", "manhattan", "minkowski", "chebyshev", "cosine"):
+            raise ValueError("Unknown metric")
+        if metric == "minkowski" and (not np.isfinite(p) or p < 1):
+            raise ValueError("Minkowski p must be finite and >= 1")
+        if not isinstance(batch_size, int) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
+        self.batch_size = batch_size
         self.k = k
         self.metric = metric
         self.weights = weights
@@ -64,6 +77,10 @@ class KNNClassifier:
     def fit(self, X, y):
         X = np.asarray(X, dtype=float)
         y = np.asarray(y)
+        if X.ndim != 2 or X.shape[0] == 0 or X.shape[1] == 0 or not np.isfinite(X).all():
+            raise ValueError("X must be a nonempty finite 2D array")
+        if y.ndim != 1 or len(y) == 0:
+            raise ValueError("y must be a nonempty 1D array")
         if len(X) != len(y):
             raise ValueError("X และ y ต้องมีจำนวนแถวเท่ากัน")
         if self.k > len(X):
@@ -84,51 +101,63 @@ class KNNClassifier:
 
     # ---------------- หาเพื่อนบ้าน ----------------
     def kneighbors(self, X):
+        if not hasattr(self, "X_"):
+            raise RuntimeError("Call fit before predicting")
         X = np.asarray(X, dtype=float)
         if X.ndim == 1:
             X = X[None, :]
+        if X.ndim != 2 or X.shape[1] != self.X_.shape[1] or not np.isfinite(X).all():
+            raise ValueError("Query must be finite and have the same feature count as training data")
         if self.standardize:
             X = (X - self.mean_) / self.std_
 
-        D = pairwise_distances(X, self.X_, self.metric, self.p)
-        # argpartition เร็วกว่า argsort เต็ม ๆ แล้วค่อยเรียงเฉพาะ k ตัว
-        idx = np.argpartition(D, self.k - 1, axis=1)[:, : self.k]
-        d = np.take_along_axis(D, idx, axis=1)
-        order = np.argsort(d, axis=1, kind="stable")
-        return np.take_along_axis(d, order, axis=1), np.take_along_axis(idx, order, axis=1)
+        all_dist, all_idx = [], []
+        for start in range(0, len(X), self.batch_size):
+            D = pairwise_distances(X[start:start + self.batch_size], self.X_, self.metric, self.p)
+            # kth cutoff with deterministic ordering of equal distances by training index.
+            idx = np.argpartition(D, self.k - 1, axis=1)[:, :self.k]
+            if self.k < self.X_.shape[0]:
+                threshold = np.max(np.take_along_axis(D, idx, axis=1), axis=1)
+                # Only revisit rows whose kth distance has a tie across the cutoff.
+                ties = np.sum(D <= threshold[:, None], axis=1) > self.k
+                for r in np.flatnonzero(ties):
+                    idx[r] = np.lexsort((np.arange(D.shape[1]), D[r]))[:self.k]
+            d = np.take_along_axis(D, idx, axis=1)
+            order = np.lexsort((idx, d), axis=1)
+            all_dist.append(np.take_along_axis(d, order, axis=1))
+            all_idx.append(np.take_along_axis(idx, order, axis=1))
+        if not all_dist:
+            return np.empty((0, self.k)), np.empty((0, self.k), dtype=int)
+        return np.vstack(all_dist), np.vstack(all_idx)
+
+    def _votes(self, dist, idx):
+        if self.weights == "distance":
+            zeros = dist <= 1e-12
+            w = np.where(zeros.any(axis=1, keepdims=True), zeros.astype(float),
+                         1.0 / np.maximum(dist, 1e-12))
+        else:
+            w = np.ones_like(dist)
+        votes = np.zeros((len(dist), len(self.classes_)), dtype=float)
+        labels = self._y_idx[idx]
+        np.add.at(votes, (np.repeat(np.arange(len(dist)), self.k), labels.ravel()), w.ravel())
+        return votes, labels
 
     # ---------------- ความน่าจะเป็นของแต่ละคลาส ----------------
     def predict_proba(self, X):
         dist, idx = self.kneighbors(X)
-
-        if self.weights == "distance":
-            w = 1.0 / np.maximum(dist, 1e-12)   # ระยะ 0 -> น้ำหนักสูงมาก
-        else:
-            w = np.ones_like(dist)
-
-        n_query, n_classes = len(dist), len(self.classes_)
-        votes = np.zeros((n_query, n_classes))
-        labels = self._y_idx[idx]               # (n_query, k)
-        rows = np.repeat(np.arange(n_query), self.k)
-        np.add.at(votes, (rows, labels.ravel()), w.ravel())
-
+        votes, _ = self._votes(dist, idx)
         return votes / votes.sum(axis=1, keepdims=True)
 
-    # ---------------- ทำนาย ----------------
     def predict(self, X):
-        proba = self.predict_proba(X)
         dist, idx = self.kneighbors(X)
-        labels = self._y_idx[idx]
-
-        preds = []
-        for i in range(len(proba)):
-            best = np.flatnonzero(np.isclose(proba[i], proba[i].max()))
-            if len(best) > 1:
-                # เสมอกัน -> เลือกคลาสที่ระยะรวมของเพื่อนบ้านน้อยที่สุด
-                totals = [dist[i][labels[i] == c].sum() for c in best]
-                best = [best[int(np.argmin(totals))]]
-            preds.append(self.classes_[best[0]])
-        return np.array(preds)
+        votes, labels = self._votes(dist, idx)
+        predictions = np.argmax(votes, axis=1)
+        for i in range(len(votes)):
+            tied = np.flatnonzero(np.isclose(votes[i], votes[i].max()))
+            if len(tied) > 1:
+                sums = np.array([dist[i, labels[i] == c].sum() for c in tied])
+                predictions[i] = tied[np.argmin(sums)]
+        return self.classes_[predictions]
 
     def score(self, X, y):
         return float(np.mean(self.predict(X) == np.asarray(y)))
@@ -147,6 +176,8 @@ def confusion_matrix(y_true, y_pred, classes):
 
 def k_fold_indices(n, n_splits=5, seed=0):
     rng = np.random.default_rng(seed)
+    if not isinstance(n_splits, int) or not 2 <= n_splits <= n:
+        raise ValueError("n_splits must be between 2 and n_samples")
     perm = rng.permutation(n)
     return np.array_split(perm, n_splits)
 
@@ -164,12 +195,16 @@ def cross_val_score(X, y, n_splits=5, seed=0, **knn_params):
 
 def find_best_k(X, y, k_values=range(1, 16), n_splits=5, seed=0, **knn_params):
     """ลองหลายค่า k ด้วย cross-validation แล้วคืน k ที่ให้ accuracy เฉลี่ยสูงสุด"""
-    n_train = len(X) - len(X) // n_splits - 1      # กัน k > จำนวนข้อมูลฝึกใน fold
+    if not 2 <= n_splits <= len(X):
+        raise ValueError("Invalid n_splits")
+    n_train = len(X) - int(np.ceil(len(X) / n_splits))
     results = {}
     for k in k_values:
         if k > n_train:
             continue
         results[k] = cross_val_score(X, y, n_splits, seed, k=k, **knn_params).mean()
+    if not results:
+        raise ValueError("No valid k values for this dataset")
     best_k = max(results, key=results.get)
     return best_k, results
 

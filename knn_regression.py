@@ -68,6 +68,12 @@ class KNNRegressor:
             raise ValueError("weights ต้องเป็น 'uniform' หรือ 'distance'")
         if algorithm not in ("auto", "brute", "kd_tree"):
             raise ValueError("algorithm ต้องเป็น 'auto', 'brute' หรือ 'kd_tree'")
+        if not isinstance(k, (int, np.integer)) or isinstance(k, (bool, np.bool_)) or k < 1:
+            raise ValueError("k must be a positive integer")
+        if metric not in ("euclidean", "manhattan", "minkowski", "chebyshev", "cosine"):
+            raise ValueError("Unknown metric")
+        if metric == "minkowski" and (not np.isfinite(p) or p < 1):
+            raise ValueError("Minkowski p must be >= 1")
         self.k = k
         self.metric = metric
         self.weights = weights
@@ -81,6 +87,10 @@ class KNNRegressor:
         if X.ndim == 1:
             X = X[:, None]
         y = np.asarray(y, dtype=float)
+        if X.ndim != 2 or not X.size or not np.isfinite(X).all():
+            raise ValueError("X must be finite and nonempty")
+        if y.ndim != 1 or not np.isfinite(y).all():
+            raise ValueError("y must be finite and 1D")
         if len(X) != len(y):
             raise ValueError("X และ y ต้องมีจำนวนแถวเท่ากัน")
         if self.k > len(X):
@@ -107,10 +117,14 @@ class KNNRegressor:
         return self
 
     def kneighbors(self, X):
+        if not hasattr(self, "X_"):
+            raise RuntimeError("Call fit before predicting")
         X = np.asarray(X, dtype=float)
         if X.ndim == 1:
             # จุดเดียว: ถ้าโมเดลมีหลายฟีเจอร์ให้ถือเป็น 1 แถว ถ้ามีฟีเจอร์เดียวให้ถือเป็นหลายแถว
             X = X[None, :] if self.X_.shape[1] > 1 else X[:, None]
+        if X.ndim != 2 or X.shape[1] != self.X_.shape[1] or not np.isfinite(X).all():
+            raise ValueError("Invalid query shape or nonfinite values")
         if self.standardize:
             X = (X - self.mean_) / self.std_
         if self.tree_ is not None:
@@ -121,7 +135,9 @@ class KNNRegressor:
         dist, idx = self.kneighbors(X)
         neighbor_y = self.y_[idx]                       # (n_query, k)
         if self.weights == "distance":
-            w = 1.0 / np.maximum(dist, 1e-12)
+            zeros = dist <= 1e-12
+            w = np.where(zeros.any(axis=1, keepdims=True), zeros.astype(float),
+                         1.0 / np.maximum(dist, 1e-12))
         else:
             w = np.ones_like(dist)
         return (w * neighbor_y).sum(axis=1) / w.sum(axis=1)
@@ -158,6 +174,8 @@ def cross_val_score(X, y, n_splits=5, seed=0, **params):
     if X.ndim == 1:
         X = X[:, None]
     y = np.asarray(y, float)
+    if not isinstance(n_splits, int) or not 2 <= n_splits <= len(X):
+        raise ValueError("Invalid n_splits")
     folds = np.array_split(np.random.default_rng(seed).permutation(len(X)), n_splits)
     scores = []
     for i, test_idx in enumerate(folds):
@@ -168,9 +186,13 @@ def cross_val_score(X, y, n_splits=5, seed=0, **params):
 
 
 def find_best_k(X, y, k_values=range(1, 31), n_splits=5, seed=0, **params):
-    max_train = len(X) - len(X) // n_splits - 1
+    if not 2 <= n_splits <= len(X):
+        raise ValueError("Invalid n_splits")
+    max_train = len(X) - int(np.ceil(len(X) / n_splits))
     results = {k: cross_val_score(X, y, n_splits, seed, k=k, **params).mean()
                for k in k_values if k <= max_train}
+    if not results:
+        raise ValueError("No valid k values for this dataset")
     return max(results, key=results.get), results
 
 

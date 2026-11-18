@@ -48,6 +48,10 @@ class KDTree:
         if metric not in KD_METRICS:
             raise ValueError(f"metric ต้องเป็นหนึ่งใน {KD_METRICS}")
         self.X = np.asarray(X, dtype=float)
+        if self.X.ndim != 2 or not self.X.size or not np.isfinite(self.X).all():
+            raise ValueError("X must be nonempty finite 2D data")
+        if metric == "minkowski" and (not np.isfinite(p) or p < 1):
+            raise ValueError("Minkowski p must be >= 1")
         self.leaf_size = max(1, int(leaf_size))
         self.metric = metric
         self.p = p
@@ -91,7 +95,7 @@ class KDTree:
 
         while stack:
             node, bound = stack.pop()
-            if len(heap) == k and bound >= -heap[0][0]:
+            if len(heap) == k and bound > -heap[0][0]:
                 continue                 # กิ่งนี้ไกลเกินไป ตัดทิ้ง
 
             # ลงไปหา leaf โดยเลือกฝั่งใกล้ก่อน และฝากฝั่งไกลไว้ใน stack
@@ -121,6 +125,10 @@ class KDTree:
         Q = np.asarray(Q, dtype=float)
         if Q.ndim == 1:
             Q = Q[None, :]
+        if not isinstance(k, (int, np.integer)) or k < 1:
+            raise ValueError("k must be a positive integer")
+        if Q.ndim != 2 or Q.shape[1] != self.X.shape[1] or not np.isfinite(Q).all():
+            raise ValueError("Invalid query dimensions or values")
         if k > len(self.X):
             raise ValueError(f"k={k} มากกว่าจำนวนข้อมูล ({len(self.X)})")
         out_d = np.empty((len(Q), k))

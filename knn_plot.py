@@ -103,9 +103,12 @@ if __name__ == "__main__":
                                title=f"k = {k}  (train acc = {acc:.2f})")
     fig.suptitle("ผลของค่า k: k=1 ขอบหยัก (overfit), k=50 เรียบเกินไป (underfit)")
     fig.tight_layout()
-    p1 = f"{out_dir}/knn_decision_boundary_k.png"
+    from pathlib import Path
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    p1 = str(Path(out_dir) / "knn_decision_boundary_k.png")
     fig.savefig(p1, dpi=120)
     print("บันทึกแล้ว:", p1)
+    plt.close(fig)
 
     # --- รูปที่ 2: เปรียบเทียบ uniform vs distance และ metric (3 คลาส) ---
     X, y = make_blobs(60, seed=1)
@@ -121,6 +124,7 @@ if __name__ == "__main__":
                                title=f"{cfg['metric']}, {cfg['weights']}, k={cfg['k']}")
     fig.suptitle("เปรียบเทียบ weights และ metric บนข้อมูล 3 คลาส")
     fig.tight_layout()
-    p2 = f"{out_dir}/knn_decision_boundary_config.png"
+    p2 = str(Path(out_dir) / "knn_decision_boundary_config.png")
     fig.savefig(p2, dpi=120)
     print("บันทึกแล้ว:", p2)
+    plt.close(fig)
