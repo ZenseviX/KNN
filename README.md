@@ -1,63 +1,49 @@
-# KNN — Optimized NumPy implementation
+# KNN — Minimal Optimized
 
-A learning-oriented K-Nearest Neighbors project, supporting classification, regression, custom distance metrics, KD-tree search and visualization. This version retains the five original Python examples and improves reliability and memory efficiency.
+A compact, NumPy-only **K-Nearest Neighbors (KNN)** project. Exactly two files: `KNN.py` and this `README.md`.
 
-## Requirements
+## Setup
 
-Python 3.10+ and NumPy. Matplotlib is used only for plots.
+Requires Python 3.10+ and NumPy:
 
-```bash
-python -m pip install -r requirements.txt
+```powershell
+python -m pip install numpy
 ```
 
-## Run examples
+## Run
 
-```bash
+```powershell
 python KNN.py
-python knn_advanced.py
-python knn_plot.py output
-python knn_regression.py
-python knn_kdtree.py
 ```
 
-Note: The last two examples include larger performance demonstrations and may take longer. Use the automated tests for a quick check.
-
-## Quick usage
+## Example
 
 ```python
-import numpy as np
-from knn_advanced import KNNClassifier
-from knn_regression import KNNRegressor
+from KNN import knn_predict, KNNClassifier, KNNRegressor
 
-X = np.array([[0, 0], [1, 1], [9, 9], [10, 10]], dtype=float)
-classifier = KNNClassifier(k=2, weights="distance", standardize=True, batch_size=128)
-classifier.fit(X, np.array(["A", "A", "B", "B"]))
-print(classifier.predict([[0.3, 0.2]]))
+X = [[0, 0], [1, 1], [8, 8], [9, 9]]
+labels = ["A", "A", "B", "B"]
 
-regressor = KNNRegressor(k=2, weights="distance", algorithm="brute")
-regressor.fit(X, np.array([1., 2., 9., 10.]))
-print(regressor.predict([[0.3, 0.2]]))
+print(knn_predict(X, labels, [0.2, 0.3], k=3))
+print(KNNClassifier(k=3, weights="distance").fit(X, labels).predict([[0.2, 0.3]]))
+print(KNNRegressor(k=2).fit(X, [1, 2, 8, 9]).predict([[0.2, 0.3]]))
 ```
 
-## Improvements
+## What is included
 
-- Classification processes query vectors in batches (`batch_size`), avoiding one large query-by-training distance matrix.
-- Consistent validation for positive `k`, data shape and finite numeric inputs.
-- Distance-weighted voting handles exact duplicate positions by considering only zero-distance neighbors, consistent with nearest-neighbor semantics.
-- Fixed cross-validation's maximum permitted `k` for the smallest training fold and explicit validation when none is usable.
-- Fixed numerical rounding for cosine distance and added deterministic index-based tie ordering in brute-force classification.
-- KD-tree performs less aggressive pruning at equal-distance boundaries and validates query input.
-- Basic KNN example has no import-time side effects; plotting creates its output directory.
-- Regression and classification keep their existing public APIs.
+- Basic `knn_predict(X, y, sample, k)` API returning predicted label and nearest labels
+- `KNNClassifier`: classification, `predict_proba()`, accuracy `score()`
+- `KNNRegressor`: numerical prediction and R² `score()`
+- Distance methods: Euclidean, Manhattan, Minkowski, Chebyshev, Cosine
+- Uniform or inverse-distance weighting, optional feature standardization, batched queries
+- Validation and deterministic behavior when neighbor distances tie
 
-For `cosine`, zero-length vectors use zero-normalized representations. KD-tree is not available for cosine.
+## What was removed
 
-## Run tests
+The previous repository's `knn_advanced.py`, `knn_kdtree.py`, `knn_plot.py`, `knn_regression.py`, `test_knn.py`, `requirements.txt`, and `.gitignore` are intentionally **not included** in this minimal version. Advanced classification and regression are consolidated into `KNN.py`; KD-tree and plotting are removed. If existing code imports the removed modules, update those imports to `from KNN import KNNClassifier, KNNRegressor`.
 
-```bash
-python -m unittest discover -v
-```
+NumPy is the only dependency. This version prioritizes clarity and compactness; it does not claim a benchmarked speedup over the previous implementation.
 
-## Notes
+## Update an existing GitHub repository
 
-These are exact nearest-neighbor algorithms, not an approximate nearest-neighbor index. `algorithm="auto"` for regression can choose KD-tree for larger low-dimensional datasets. For high-dimensional datasets, brute-force search can be faster. Speed varies with dataset and CPU; no universal speedup percentage is claimed.
+After extracting, copy the **two files** into your existing cloned repo (keep its hidden `.git` folder). To make your GitHub repo contain only these two tracked files, remove the old tracked `.py` modules and other unwanted files from the local clone, review `git status`, then commit and push. Do not delete `.git`.
